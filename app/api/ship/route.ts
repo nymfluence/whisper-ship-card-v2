@@ -1,22 +1,22 @@
-// app/api/ship/route.ts
-import { ImageResponse } from "@vercel/og";
+import { ImageResponse } from "next/og";
 
 export const runtime = "edge";
+export const dynamic = "force-dynamic";
 
-const CANVAS_W = 512; // 220.5 + 71.1 + 220.5 ≈ 512
+const CANVAS_W = 512;
 const CANVAS_H = 220;
 
-const BAR_X = 220.5;
+// Your bar + avatar layout (from Canva)
+const PFP_W = 220.5;
 const BAR_W = 71.1;
+
+// Bar fill area (inside the bar)
+const FILL_INSET_X = 6; // tweak if needed
+const FILL_INSET_TOP = 6;
+const FILL_INSET_BOTTOM = 6;
 
 function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
-}
-
-// Convert 0–100 score to bar fill height (bottom-up)
-function barFillHeight(score: number) {
-  const s = clamp(score, 0, 100);
-  return Math.round((CANVAS_H * s) / 100);
 }
 
 export async function GET(req: Request) {
@@ -25,13 +25,14 @@ export async function GET(req: Request) {
   const scoreRaw = searchParams.get("score") ?? "0";
   const score = clamp(parseInt(scoreRaw, 10) || 0, 0, 100);
 
-  const u1 = searchParams.get("u1") || ""; // optional avatar URL
-  const u2 = searchParams.get("u2") || ""; // optional avatar URL
   const debug = searchParams.get("debug") === "1";
 
-  const baseUrl = new URL(req.url).origin;
-  const templateUrl = `${baseUrl}/ship-base.png`;
+  // Template should be in /public as public/ship-base.png
+  // So it’s served at: https://<your-domain>/ship-base.png
+  const origin = new URL(req.url).origin;
+  const templateUrl = `${origin}/ship-base.png`;
 
+  // If debug=1, return JSON only (helps you diagnose)
   if (debug) {
     return new Response(
       JSON.stringify(
@@ -39,110 +40,46 @@ export async function GET(req: Request) {
           scoreRaw,
           score,
           templateUrl,
-          u1Provided: Boolean(u1),
-          u2Provided: Boolean(u2),
+          hint:
+            "If image is blank, the template fetch or ImageResponse render is failing. Check Vercel logs.",
         },
         null,
         2
       ),
-      { headers: { "content-type": "application/json; charset=utf-8" } }
+      {
+        status: 200,
+        headers: {
+          "content-type": "application/json; charset=utf-8",
+          "cache-control": "no-store, max-age=0",
+        },
+      }
     );
   }
 
-  const fillH = barFillHeight(score);
-  const fillY = CANVAS_H - fillH;
-
-  return new ImageResponse(
-    (
-      <div
-        style={{
-          width: CANVAS_W,
-          height: CANVAS_H,
-          position: "relative",
-          overflow: "hidden",
-          backgroundColor: "#000000",
-        }}
-      >
-        {/* Template layer (this is the key change: use IMG, not CSS bg) */}
-        <img
-          src={templateUrl}
-          width={CANVAS_W}
-          height={CANVAS_H}
-          style={{
-            position: "absolute",
-            left: 0,
-            top: 0,
-          }}
-        />
-
-        {/* Optional avatars overlay (if you pass u1/u2 later) */}
-        {u1 ? (
-          <img
-            src={u1}
-            width={220}
-            height={220}
-            style={{
-              position: "absolute",
-              left: 0,
-              top: 0,
-              objectFit: "cover",
-            }}
-          />
-        ) : null}
-
-        {u2 ? (
-          <img
-            src={u2}
-            width={220}
-            height={220}
-            style={{
-              position: "absolute",
-              left: 292, // roughly 291.5
-              top: 0,
-              objectFit: "cover",
-            }}
-          />
-        ) : null}
-
-        {/* Bar fill overlay */}
-        <div
-          style={{
-            position: "absolute",
-            left: BAR_X,
-            top: fillY,
-            width: BAR_W,
-            height: fillH,
-            background: "#B57E5A",
-            opacity: 0.95,
-          }}
-        />
-
-        {/* Percentage text */}
-        <div
-          style={{
-            position: "absolute",
-            left: BAR_X,
-            bottom: 10,
-            width: BAR_W,
-            textAlign: "center",
-            color: "#ffffff",
-            fontSize: 34,
-            fontWeight: 800,
-            fontFamily: "Arial",
-            textShadow: "0 2px 8px rgba(0,0,0,0.6)",
-          }}
-        >
-          {score}%
-        </div>
-      </div>
-    ),
-    {
-      width: CANVAS_W,
-      height: CANVAS_H,
-      headers: {
-        // Helps Safari behave nicer with generated images
-        "cache-control": "no-store",
-      },
+  // Fetch the template image as bytes (this is more reliable than <img src>)
+  let templateArrayBuffer: ArrayBuffer;
+  try {
+    const tRes = await fetch(templateUrl, { cache: "no-store" });
+    if (!tRes.ok) {
+      return new Response(`Template fetch failed: ${tRes.status} ${templateUrl}`, {
+        status: 500,
+        headers: { "content-type": "text/plain; charset=utf-8" },
+      });
     }
-  );
-}
+    templateArrayBuffer = await tRes.arrayBuffer();
+  } catch (e: any) {
+    return new Response(`Template fetch exception: ${String(e?.message ?? e)}`, {
+      status: 500,
+      headers: { "content-type": "text/plain; charset=utf-8" },
+    });
+  }
+
+  // Compute fill height (bottom-up)
+  const fillMaxH = CANVAS_H - FILL_INSET_TOP - FILL_INSET_BOTTOM;
+  const fillH = Math.round((fillMaxH * score) / 100);
+  const fillY = CANVAS_H - FILL_INSET_BOTTOM - fillH;
+
+  // Fill X starts at left avatar width + inset
+  const barX = PFP_W;
+  const fillX = barX + FILL_INSET_X;
+  const
