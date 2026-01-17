@@ -1,5 +1,5 @@
 {
-  "name": "whisper-ship-card",
+  "name": "whisper-ship-card-v2",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -12,8 +12,9 @@
     "react-dom": "19.0.0"
   },
   "devDependencies": {
-    "typescript": "^5.7.3",
-    "@types/node": "^22.10.2",
-    "@types/react": "^19.0.8"
+    "@types/node": "22.10.6",
+    "@types/react": "19.0.8",
+    "@types/react-dom": "19.0.3",
+    "typescript": "5.7.3"
   }
 }
