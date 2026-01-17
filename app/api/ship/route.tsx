@@ -157,7 +157,7 @@ export async function GET(req: Request) {
             top: fillTop,
             width: BAR_W,
             height: fillH,
-            background: "linear-gradient(180deg, #761c20 0%, #761c20 100%)",
+            background: "linear-gradient(180deg, #C59474 0%, #C59474 100%)",
             opacity: 0.9,
             borderRadius: 2,
           }}
