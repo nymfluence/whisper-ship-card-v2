@@ -1,99 +1,125 @@
+/* app/api/ship/route.tsx */
 import { ImageResponse } from "next/og";
 
 export const runtime = "edge";
 
-const CANVAS_W = 512;
-const CANVAS_H = 220;
+const CANVAS_W = 1200;
+const CANVAS_H = 675;
 
-// Your Canva-measured bar coordinates
-const BAR_X = 220.5;
-const BAR_Y = 0;
-const BAR_W = 71.1;
-const BAR_H = 220;
+// Bar position (defaults: centered)
+const BAR_W = 150;
+const BAR_H = 520;
+const BAR_X = Math.round((CANVAS_W - BAR_W) / 2);
+const BAR_Y = 95;
 
-function clamp(n: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, n));
-}
+// Fill color
+const FILL_COLOR = "#761c20";
 
-function toInt(v: string | null, fallback: number) {
-  const n = Number(v);
-  return Number.isFinite(n) ? Math.trunc(n) : fallback;
-}
-
-async function fetchAsDataUrl(url: string): Promise<string> {
-  const res = await fetch(url, { cache: "no-store" });
-  if (!res.ok) throw new Error(`Fetch failed ${res.status} for ${url}`);
-  const contentType = res.headers.get("content-type") || "image/png";
-  const buf = await res.arrayBuffer();
-  const b64 = Buffer.from(buf).toString("base64");
-  return `data:${contentType};base64,${b64}`;
+/**
+ * Convert ArrayBuffer -> base64 (Edge-safe)
+ */
+function arrayBufferToBase64(buf: ArrayBuffer) {
+  let binary = "";
+  const bytes = new Uint8Array(buf);
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  // btoa exists on Edge runtime
+  return btoa(binary);
 }
 
 export async function GET(req: Request) {
-  const { searchParams } = new URL(req.url);
+  const { searchParams, origin } = new URL(req.url);
 
   const scoreRaw = searchParams.get("score") ?? "0";
-  const score = clamp(toInt(scoreRaw, 0), 0, 100);
+  let score = Number.parseFloat(scoreRaw);
+  if (Number.isNaN(score)) score = 0;
+  score = Math.max(0, Math.min(100, score));
 
   const debug = searchParams.get("debug") === "1";
+  const nocache = searchParams.has("nocache") || searchParams.has("t");
 
-  // Optional avatar URLs (later we’ll wire these into your !ship command)
-  const u1 = searchParams.get("u1");
-  const u2 = searchParams.get("u2");
+  // Optional overrides (so you can tweak placement without redeploy)
+  const barX = Number(searchParams.get("barX") ?? BAR_X);
+  const barY = Number(searchParams.get("barY") ?? BAR_Y);
+  const barW = Number(searchParams.get("barW") ?? BAR_W);
+  const barH = Number(searchParams.get("barH") ?? BAR_H);
 
-  // Prefer local public asset
-  const localTemplateUrl = new URL("/ship-base.png", req.url).toString();
+  const templateUrl = `${origin}/ship-base.png`;
 
-  // Fallback to your GitHub raw image (still fine to keep)
-  const fallbackTemplateUrl =
-    "https://github.com/nymfluence/whisper-ship-card-v2/blob/main/50.png?raw=true";
-
-  let templateUrl = localTemplateUrl;
-  let templateFetched: "primary" | "fallback" = "primary";
-  let templatePrimaryError: string | undefined;
+  // Fetch template
+  let templateFetched: "primary" | "failed" = "primary";
+  let templateError = "";
+  let templateDataUrl = "";
 
   try {
-    // Just a quick check that the local template is fetchable
-    const test = await fetch(templateUrl, { cache: "no-store" });
-    if (!test.ok) throw new Error(`Fetch failed ${test.status} for ${templateUrl}`);
+    const res = await fetch(templateUrl, {
+      // avoid cached 404s and stale template
+      cache: nocache ? "no-store" : "force-cache",
+    });
+
+    if (!res.ok) {
+      templateFetched = "failed";
+      templateError = `Fetch failed ${res.status} for ${templateUrl}`;
+    } else {
+      const buf = await res.arrayBuffer();
+      const base64 = arrayBufferToBase64(buf);
+
+      // try to infer content type; default png
+      const ct = res.headers.get("content-type") || "image/png";
+      templateDataUrl = `data:${ct};base64,${base64}`;
+    }
   } catch (e: any) {
-    templatePrimaryError = String(e?.message ?? e);
-    templateUrl = fallbackTemplateUrl;
-    templateFetched = "fallback";
+    templateFetched = "failed";
+    templateError = e?.message ? String(e.message) : "Unknown fetch error";
   }
 
-  // If debug=1, return JSON so you can see what it’s doing
+  // Debug JSON (handy for troubleshooting)
   if (debug) {
-    return new Response(
-      JSON.stringify(
-        {
-          scoreRaw,
-          score,
-          templateUrl,
-          localTemplateUrl,
-          fallbackTemplateUrl,
-          u1Provided: Boolean(u1),
-          u2Provided: Boolean(u2),
-          templatePrimaryError,
-          templateFetched,
-        },
-        null,
-        2
+    return Response.json({
+      scoreRaw,
+      score,
+      templateUrl,
+      templateFetched,
+      templateError: templateError || undefined,
+      bar: { barX, barY, barW, barH },
+      fill: { color: FILL_COLOR },
+      hint:
+        "If the bar isn't aligned, pass barX/barY/barW/barH in the URL until perfect.",
+    });
+  }
+
+  // If template failed, show a readable error image instead of blank
+  if (!templateDataUrl) {
+    return new ImageResponse(
+      (
+        <div
+          style={{
+            width: CANVAS_W,
+            height: CANVAS_H,
+            display: "flex",
+            flexDirection: "column",
+            justifyContent: "center",
+            padding: 60,
+            background: "#000",
+            color: "#fff",
+            fontSize: 32,
+          }}
+        >
+          <div style={{ fontSize: 44, fontWeight: 800, marginBottom: 16 }}>
+            Template failed to load
+          </div>
+          <div style={{ opacity: 0.9, marginBottom: 10 }}>{templateUrl}</div>
+          <div style={{ opacity: 0.8 }}>{templateError}</div>
+        </div>
       ),
-      { headers: { "content-type": "application/json; charset=utf-8" } }
+      { width: CANVAS_W, height: CANVAS_H }
     );
   }
 
-  // Build image assets as data URLs (OG renderer is happiest with data URLs)
-  const [templateDataUrl, u1Data, u2Data] = await Promise.all([
-    fetchAsDataUrl(templateUrl),
-    u1 ? fetchAsDataUrl(u1).catch(() => null) : Promise.resolve(null),
-    u2 ? fetchAsDataUrl(u2).catch(() => null) : Promise.resolve(null),
-  ]);
-
-  // Fill amount (from bottom up)
-  const fillH = Math.round((BAR_H * score) / 100);
-  const fillTop = BAR_Y + (BAR_H - fillH);
+  // Fill height based on score
+  const fillHeight = Math.round((barH * score) / 100);
 
   return new ImageResponse(
     (
@@ -103,65 +129,53 @@ export async function GET(req: Request) {
           height: CANVAS_H,
           position: "relative",
           display: "flex",
-          backgroundColor: "#000",
         }}
       >
-        {/* Base template */}
+        {/* Background template */}
         <img
           src={templateDataUrl}
           width={CANVAS_W}
           height={CANVAS_H}
-          style={{ position: "absolute", left: 0, top: 0 }}
-        />
-
-        {/* Bar fill overlay (tweak colours any time) */}
-        <div
           style={{
             position: "absolute",
-            left: BAR_X,
-            top: fillTop,
-            width: BAR_W,
-            height: fillH,
-            background: "linear-gradient(180deg, #ff4d8d 0%, #b8005a 100%)",
-            opacity: 0.9,
-            borderRadius: 2,
+            inset: 0,
+            width: CANVAS_W,
+            height: CANVAS_H,
+            objectFit: "cover",
           }}
         />
 
-        {/* Optional avatars if provided */}
-        {u1Data ? (
-          <img
-            src={u1Data}
-            width={220}
-            height={220}
+        {/* Fill overlay (clipped to bar area) */}
+        <div
+          style={{
+            position: "absolute",
+            left: barX,
+            top: barY,
+            width: barW,
+            height: barH,
+            overflow: "hidden",
+          }}
+        >
+          <div
             style={{
               position: "absolute",
               left: 0,
-              top: 0,
-              objectFit: "cover",
+              right: 0,
+              bottom: 0,
+              height: fillHeight,
+              background: FILL_COLOR,
+              opacity: 0.92,
             }}
           />
-        ) : null}
-
-        {u2Data ? (
-          <img
-            src={u2Data}
-            width={220}
-            height={220}
-            style={{
-              position: "absolute",
-              left: 292,
-              top: 0,
-              objectFit: "cover",
-            }}
-          />
-        ) : null}
+        </div>
       </div>
     ),
     {
       width: CANVAS_W,
       height: CANVAS_H,
       headers: {
+        "content-type": "image/png",
+        // Make sure Discord / browsers don’t cache old scores
         "cache-control": "no-store, max-age=0",
       },
     }
