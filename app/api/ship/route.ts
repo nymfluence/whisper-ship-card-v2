@@ -82,4 +82,65 @@ export async function GET(req: Request) {
   // Fill X starts at left avatar width + inset
   const barX = PFP_W;
   const fillX = barX + FILL_INSET_X;
-  const
+  const fillW = BAR_W - FILL_INSET_X * 2;
+
+  return new ImageResponse(
+    (
+      <div
+        style={{
+          width: CANVAS_W,
+          height: CANVAS_H,
+          position: "relative",
+          display: "flex",
+          background: "#000",
+        }}
+      >
+        {/* Template image as embedded bytes */}
+        {/* @ts-ignore */}
+        <img
+          src={templateArrayBuffer as any}
+          width={CANVAS_W}
+          height={CANVAS_H}
+          style={{ position: "absolute", left: 0, top: 0 }}
+        />
+
+        {/* Bar fill overlay */}
+        <div
+          style={{
+            position: "absolute",
+            left: fillX,
+            top: fillY,
+            width: fillW,
+            height: fillH,
+            background: "rgba(181,126,90,0.95)", // #B57E5A-ish
+            borderRadius: 2,
+          }}
+        />
+
+        {/* Big % label (bottom-center of bar) */}
+        <div
+          style={{
+            position: "absolute",
+            left: PFP_W,
+            top: CANVAS_H - 62,
+            width: BAR_W,
+            textAlign: "center",
+            fontSize: 34,
+            fontWeight: 800,
+            color: "#fff",
+            textShadow: "0 2px 6px rgba(0,0,0,0.5)",
+          }}
+        >
+          {score}%
+        </div>
+      </div>
+    ),
+    {
+      width: CANVAS_W,
+      height: CANVAS_H,
+      headers: {
+        "cache-control": "no-store, max-age=0",
+      },
+    }
+  );
+}
