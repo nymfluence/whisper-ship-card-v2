@@ -5,7 +5,7 @@ export const runtime = "edge";
 const CANVAS_W = 512;
 const CANVAS_H = 220;
 
-// Bar coordinates (from your Canva measurements)
+// Your Canva-measured bar coordinates
 const BAR_X = 220.5;
 const BAR_Y = 0;
 const BAR_W = 71.1;
@@ -20,12 +20,24 @@ function toInt(v: string | null, fallback: number) {
   return Number.isFinite(n) ? Math.trunc(n) : fallback;
 }
 
+// Edge-safe base64 (NO Buffer)
+function arrayBufferToBase64(buf: ArrayBuffer) {
+  let binary = "";
+  const bytes = new Uint8Array(buf);
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  // btoa exists in Edge runtime
+  return btoa(binary);
+}
+
 async function fetchAsDataUrl(url: string): Promise<string> {
   const res = await fetch(url, { cache: "no-store" });
   if (!res.ok) throw new Error(`Fetch failed ${res.status} for ${url}`);
   const contentType = res.headers.get("content-type") || "image/png";
   const buf = await res.arrayBuffer();
-  const b64 = Buffer.from(buf).toString("base64");
+  const b64 = arrayBufferToBase64(buf);
   return `data:${contentType};base64,${b64}`;
 }
 
@@ -37,19 +49,29 @@ export async function GET(req: Request) {
 
   const debug = searchParams.get("debug") === "1";
 
-  const localTemplateUrl = new URL("/ship-base.png", req.url).toString();
-  const overlay69Url = new URL("/overlay-69.png", req.url).toString();
-  const overlay100Url = new URL("/overlay-100.png", req.url).toString();
+  // Optional avatar URLs (if you pass them later)
+  const u1 = searchParams.get("u1");
+  const u2 = searchParams.get("u2");
 
+  // Public assets (served from /public)
+  const templateUrl = new URL("/ship-base.png", req.url).toString();
+
+  // Overlays (only for 69 and 100)
+  const overlayPath =
+    score === 69 ? "/overlay-69.png" : score === 100 ? "/overlay-100.png" : null;
+  const overlayUrl = overlayPath ? new URL(overlayPath, req.url).toString() : null;
+
+  // Debug mode returns JSON (no image)
   if (debug) {
     return new Response(
       JSON.stringify(
         {
+          scoreRaw,
           score,
-          overlay:
-            score === 69 ? "overlay-69.png" :
-            score === 100 ? "overlay-100.png" :
-            null,
+          templateUrl,
+          overlayUrl,
+          u1Provided: Boolean(u1),
+          u2Provided: Boolean(u2),
         },
         null,
         2
@@ -58,22 +80,26 @@ export async function GET(req: Request) {
     );
   }
 
-  const templateDataUrl = await fetchAsDataUrl(localTemplateUrl);
+  // Fetch images as data URLs (OG renderer behaves best this way)
+  const [templateDataUrl, overlayDataUrl, u1Data, u2Data] = await Promise.all([
+    fetchAsDataUrl(templateUrl),
+    overlayUrl ? fetchAsDataUrl(overlayUrl).catch(() => null) : Promise.resolve(null),
+    u1 ? fetchAsDataUrl(u1).catch(() => null) : Promise.resolve(null),
+    u2 ? fetchAsDataUrl(u2).catch(() => null) : Promise.resolve(null),
+  ]);
 
-  const overlayDataUrl =
-    score === 69
-      ? await fetchAsDataUrl(overlay69Url)
-      : score === 100
-      ? await fetchAsDataUrl(overlay100Url)
-      : null;
-
+  // Fill amount (from bottom up)
   const fillH = Math.round((BAR_H * score) / 100);
   const fillTop = BAR_Y + (BAR_H - fillH);
 
-  const textSize =
-    score === 100 ? 48 :
-    score === 69 ? 44 :
-    32;
+  // % text position: centered in the bar
+  const percentText = `${score}%`;
+  const textX = BAR_X + BAR_W / 2;
+  const textY = 96; // tweak if you want it higher/lower
+
+  // Bigger for 69 & 100
+  const isSpecial = score === 69 || score === 100;
+  const fontSize = isSpecial ? 62 : 46;
 
   return new ImageResponse(
     (
@@ -82,8 +108,8 @@ export async function GET(req: Request) {
           width: CANVAS_W,
           height: CANVAS_H,
           position: "relative",
-          backgroundColor: "#000",
           display: "flex",
+          backgroundColor: "#000",
         }}
       >
         {/* Base template */}
@@ -91,10 +117,39 @@ export async function GET(req: Request) {
           src={templateDataUrl}
           width={CANVAS_W}
           height={CANVAS_H}
-          style={{ position: "absolute", inset: 0 }}
+          style={{ position: "absolute", left: 0, top: 0 }}
         />
 
-        {/* Bar fill */}
+        {/* Optional avatars (if provided) */}
+        {u1Data ? (
+          <img
+            src={u1Data}
+            width={220}
+            height={220}
+            style={{
+              position: "absolute",
+              left: 0,
+              top: 0,
+              objectFit: "cover",
+            }}
+          />
+        ) : null}
+
+        {u2Data ? (
+          <img
+            src={u2Data}
+            width={220}
+            height={220}
+            style={{
+              position: "absolute",
+              left: 292,
+              top: 0,
+              objectFit: "cover",
+            }}
+          />
+        ) : null}
+
+        {/* Bar fill overlay */}
         <div
           style={{
             position: "absolute",
@@ -102,51 +157,46 @@ export async function GET(req: Request) {
             top: fillTop,
             width: BAR_W,
             height: fillH,
-            background: "#6e1011",
+            background: "linear-gradient(180deg, #761c20 0%, #761c20 100%)",
             opacity: 0.9,
             borderRadius: 2,
           }}
         />
 
-        {/* Percentage text (always shown) */}
+        {/* % text (ALWAYS shown) */}
         <div
           style={{
             position: "absolute",
-            left: BAR_X,
-            top: BAR_Y,
-            width: BAR_W,
-            height: BAR_H,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            color: "#ffffff",
-            fontWeight: 800,
-            fontSize: textSize,
-            textShadow: "0 2px 6px rgba(0,0,0,0.6)",
+            left: textX,
+            top: textY,
+            transform: "translateX(-50%)",
+            fontSize,
+            fontWeight: 900,
+            color: "#FFFFFF",
+            letterSpacing: "-1px",
+            textShadow: "0px 3px 10px rgba(0,0,0,0.65)",
+            lineHeight: 1,
           }}
         >
-          {score}%
+          {percentText}
         </div>
 
-        {/* Celebratory overlay (ON TOP OF EVERYTHING) */}
-        {overlayDataUrl && (
+        {/* Special overlays ON TOP of everything (including text) */}
+        {overlayDataUrl ? (
           <img
             src={overlayDataUrl}
             width={CANVAS_W}
             height={CANVAS_H}
-            style={{
-              position: "absolute",
-              inset: 0,
-            }}
+            style={{ position: "absolute", left: 0, top: 0 }}
           />
-        )}
+        ) : null}
       </div>
     ),
     {
       width: CANVAS_W,
       height: CANVAS_H,
       headers: {
-        "cache-control": "no-store",
+        "cache-control": "no-store, max-age=0",
       },
     }
   );
