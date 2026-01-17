@@ -122,7 +122,7 @@ export async function GET(req: Request) {
             top: fillTop,
             width: BAR_W,
             height: fillH,
-            background: "linear-gradient(180deg, #4a2125 0%, #410200 100%)",
+            background: "linear-gradient(180deg, #6e1011 0%, #6e1011 100%)",
             opacity: 0.9,
             borderRadius: 2,
           }}
