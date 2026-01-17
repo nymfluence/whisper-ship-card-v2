@@ -56,10 +56,18 @@ export async function GET(req: Request) {
   // Public assets (served from /public)
   const templateUrl = new URL("/ship-base.png", req.url).toString();
 
-  // Overlays (only for 69 and 100)
+  // Overlays:
+  // - 69: overlay-69
+  // - 100: overlay-100
+  // - everything else: overlay-all
   const overlayPath =
-    score === 69 ? "/overlay-69.png" : score === 100 ? "/overlay-100.png" : null;
-  const overlayUrl = overlayPath ? new URL(overlayPath, req.url).toString() : null;
+    score === 69
+      ? "/overlay-69.png"
+      : score === 100
+      ? "/overlay-100.png"
+      : "/overlay-all.png";
+
+  const overlayUrl = new URL(overlayPath, req.url).toString();
 
   // Debug mode returns JSON (no image)
   if (debug) {
@@ -83,7 +91,7 @@ export async function GET(req: Request) {
   // Fetch images as data URLs (OG renderer behaves best this way)
   const [templateDataUrl, overlayDataUrl, u1Data, u2Data] = await Promise.all([
     fetchAsDataUrl(templateUrl),
-    overlayUrl ? fetchAsDataUrl(overlayUrl).catch(() => null) : Promise.resolve(null),
+    fetchAsDataUrl(overlayUrl).catch(() => null),
     u1 ? fetchAsDataUrl(u1).catch(() => null) : Promise.resolve(null),
     u2 ? fetchAsDataUrl(u2).catch(() => null) : Promise.resolve(null),
   ]);
@@ -181,7 +189,7 @@ export async function GET(req: Request) {
           {percentText}
         </div>
 
-        {/* Special overlays ON TOP of everything (including text) */}
+        {/* Overlay ON TOP of everything (including text) */}
         {overlayDataUrl ? (
           <img
             src={overlayDataUrl}
