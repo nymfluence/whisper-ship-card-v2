@@ -4,122 +4,127 @@ import { ImageResponse } from "next/og";
 export const runtime = "edge";
 
 const CANVAS_W = 1200;
-const CANVAS_H = 675;
-
-// Bar position (defaults: centered)
-const BAR_W = 150;
-const BAR_H = 520;
-const BAR_X = Math.round((CANVAS_W - BAR_W) / 2);
-const BAR_Y = 95;
-
-// Fill color
-const FILL_COLOR = "#761c20";
+const CANVAS_H = 600;
 
 /**
- * Convert ArrayBuffer -> base64 (Edge-safe)
+ * These are the bar coordinates on your template image.
+ * If your fill looks slightly off, tweak BAR_X / BAR_Y / BAR_W / BAR_H.
  */
-function arrayBufferToBase64(buf: ArrayBuffer) {
-  let binary = "";
-  const bytes = new Uint8Array(buf);
-  const chunkSize = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunkSize) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
-  }
-  // btoa exists on Edge runtime
-  return btoa(binary);
+const BAR_X = 540;
+const BAR_Y = 120;
+const BAR_W = 120;
+const BAR_H = 420;
+
+const FILL_COLOR = "#761c20"; // your requested red
+
+function clamp(n: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, n));
+}
+
+/** tiny deterministic RNG (so hearts are stable per URL) */
+function makeRng(seed: number) {
+  let x = seed || 123456789;
+  return () => {
+    // xorshift32
+    x ^= x << 13;
+    x ^= x >>> 17;
+    x ^= x << 5;
+    // 0..1
+    return ((x >>> 0) % 100000) / 100000;
+  };
+}
+
+function HeartSvg({
+  size,
+  opacity,
+}: {
+  size: number;
+  opacity: number;
+}) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      style={{ opacity }}
+    >
+      <path
+        d="M12 21s-7.2-4.6-9.6-8.6C.6 9.1 2.1 5.9 5.2 5.1c1.9-.5 3.8.2 4.8 1.6 1-1.4 2.9-2.1 4.8-1.6 3.1.8 4.6 4 2.8 7.3C19.2 16.4 12 21 12 21z"
+        fill="#ff2d55"
+      />
+    </svg>
+  );
 }
 
 export async function GET(req: Request) {
-  const { searchParams, origin } = new URL(req.url);
+  const { searchParams } = new URL(req.url);
 
   const scoreRaw = searchParams.get("score") ?? "0";
-  let score = Number.parseFloat(scoreRaw);
-  if (Number.isNaN(score)) score = 0;
-  score = Math.max(0, Math.min(100, score));
+  const score = clamp(parseInt(scoreRaw, 10) || 0, 0, 100);
 
+  // optional cache busters / deterministic seed for heart placement
+  const t = searchParams.get("t") ?? searchParams.get("nocache") ?? "1";
+  const seed = (parseInt(t, 10) || 1) + score * 999;
+
+  // debug mode returns JSON instead of an image
   const debug = searchParams.get("debug") === "1";
-  const nocache = searchParams.has("nocache") || searchParams.has("t");
 
-  // Optional overrides (so you can tweak placement without redeploy)
-  const barX = Number(searchParams.get("barX") ?? BAR_X);
-  const barY = Number(searchParams.get("barY") ?? BAR_Y);
-  const barW = Number(searchParams.get("barW") ?? BAR_W);
-  const barH = Number(searchParams.get("barH") ?? BAR_H);
+  // template served from /public/ship-base.png
+  const templateUrl = new URL("/ship-base.png", req.url).toString();
 
-  const templateUrl = `${origin}/ship-base.png`;
-
-  // Fetch template
-  let templateFetched: "primary" | "failed" = "primary";
-  let templateError = "";
-  let templateDataUrl = "";
-
-  try {
-    const res = await fetch(templateUrl, {
-      // avoid cached 404s and stale template
-      cache: nocache ? "no-store" : "force-cache",
-    });
-
-    if (!res.ok) {
-      templateFetched = "failed";
-      templateError = `Fetch failed ${res.status} for ${templateUrl}`;
-    } else {
-      const buf = await res.arrayBuffer();
-      const base64 = arrayBufferToBase64(buf);
-
-      // try to infer content type; default png
-      const ct = res.headers.get("content-type") || "image/png";
-      templateDataUrl = `data:${ct};base64,${base64}`;
-    }
-  } catch (e: any) {
-    templateFetched = "failed";
-    templateError = e?.message ? String(e.message) : "Unknown fetch error";
-  }
-
-  // Debug JSON (handy for troubleshooting)
   if (debug) {
-    return Response.json({
-      scoreRaw,
-      score,
-      templateUrl,
-      templateFetched,
-      templateError: templateError || undefined,
-      bar: { barX, barY, barW, barH },
-      fill: { color: FILL_COLOR },
-      hint:
-        "If the bar isn't aligned, pass barX/barY/barW/barH in the URL until perfect.",
-    });
-  }
-
-  // If template failed, show a readable error image instead of blank
-  if (!templateDataUrl) {
-    return new ImageResponse(
-      (
-        <div
-          style={{
-            width: CANVAS_W,
-            height: CANVAS_H,
-            display: "flex",
-            flexDirection: "column",
-            justifyContent: "center",
-            padding: 60,
-            background: "#000",
-            color: "#fff",
-            fontSize: 32,
-          }}
-        >
-          <div style={{ fontSize: 44, fontWeight: 800, marginBottom: 16 }}>
-            Template failed to load
-          </div>
-          <div style={{ opacity: 0.9, marginBottom: 10 }}>{templateUrl}</div>
-          <div style={{ opacity: 0.8 }}>{templateError}</div>
-        </div>
+    return new Response(
+      JSON.stringify(
+        {
+          scoreRaw,
+          score,
+          templateUrl,
+          note:
+            "If templateUrl loads in browser, ship image should render. If the image is blank in Discord, ensure the endpoint returns image/png.",
+        },
+        null,
+        2
       ),
-      { width: CANVAS_W, height: CANVAS_H }
+      { headers: { "content-type": "application/json; charset=utf-8" } }
     );
   }
 
-  // Fill height based on score
-  const fillHeight = Math.round((barH * score) / 100);
+  // fill height from score
+  const fillH = Math.round((BAR_H * score) / 100);
+  const fillTop = BAR_Y + (BAR_H - fillH);
+
+  // Bigger text for 69 and 100 (and also 70+ for good measure)
+  const bigScore = score === 69 || score === 100;
+  const fontSize = bigScore ? 110 : score >= 70 ? 96 : 80;
+
+  // Hearts overlay ONLY for 69 or 100
+  const showHearts = score === 69 || score === 100;
+  const rng = makeRng(seed);
+  const heartsCount = score === 100 ? 40 : 28;
+
+  const hearts = showHearts
+    ? Array.from({ length: heartsCount }).map((_, i) => {
+        const x = Math.round(rng() * (CANVAS_W - 40));
+        const y = Math.round(rng() * (CANVAS_H - 40));
+        const size = Math.round(18 + rng() * 38);
+        const opacity = 0.18 + rng() * 0.35;
+        const rotate = Math.round(-25 + rng() * 50);
+
+        return (
+          <div
+            key={i}
+            style={{
+              position: "absolute",
+              left: x,
+              top: y,
+              transform: `rotate(${rotate}deg)`,
+            }}
+          >
+            <HeartSvg size={size} opacity={opacity} />
+          </div>
+        );
+      })
+    : null;
 
   return new ImageResponse(
     (
@@ -128,45 +133,57 @@ export async function GET(req: Request) {
           width: CANVAS_W,
           height: CANVAS_H,
           position: "relative",
-          display: "flex",
+          backgroundColor: "#000",
+          fontFamily:
+            'system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, "Noto Sans", "Liberation Sans", sans-serif',
         }}
       >
-        {/* Background template */}
+        {/* Template background */}
         <img
-          src={templateDataUrl}
+          src={templateUrl}
           width={CANVAS_W}
           height={CANVAS_H}
           style={{
             position: "absolute",
-            inset: 0,
+            left: 0,
+            top: 0,
             width: CANVAS_W,
             height: CANVAS_H,
-            objectFit: "cover",
           }}
         />
 
-        {/* Fill overlay (clipped to bar area) */}
+        {/* Fill overlay */}
         <div
           style={{
             position: "absolute",
-            left: barX,
-            top: barY,
-            width: barW,
-            height: barH,
-            overflow: "hidden",
+            left: BAR_X,
+            top: fillTop,
+            width: BAR_W,
+            height: fillH,
+            backgroundColor: FILL_COLOR,
+            opacity: 0.92,
+          }}
+        />
+
+        {/* Hearts overlay for 69 and 100 */}
+        {hearts}
+
+        {/* % text (bigger for 69/100) */}
+        <div
+          style={{
+            position: "absolute",
+            left: 0,
+            top: 42,
+            width: CANVAS_W,
+            textAlign: "center",
+            fontSize,
+            fontWeight: 900,
+            color: "#fff",
+            letterSpacing: -2,
+            textShadow: "0 6px 18px rgba(0,0,0,0.55)",
           }}
         >
-          <div
-            style={{
-              position: "absolute",
-              left: 0,
-              right: 0,
-              bottom: 0,
-              height: fillHeight,
-              background: FILL_COLOR,
-              opacity: 0.92,
-            }}
-          />
+          {score}%
         </div>
       </div>
     ),
@@ -175,7 +192,7 @@ export async function GET(req: Request) {
       height: CANVAS_H,
       headers: {
         "content-type": "image/png",
-        // Make sure Discord / browsers don’t cache old scores
+        // Helps Discord re-fetch more reliably when you add &t=...
         "cache-control": "no-store, max-age=0",
       },
     }
