@@ -25,51 +25,60 @@ async function fetchAsDataUrl(url: string): Promise<string> {
   if (!res.ok) throw new Error(`Fetch failed ${res.status} for ${url}`);
   const contentType = res.headers.get("content-type") || "image/png";
   const buf = await res.arrayBuffer();
-  // @ts-ignore Buffer exists in the Edge runtime for this use case in Next OG
+  // @ts-ignore Buffer exists in Vercel Edge for next/og usage
   const b64 = Buffer.from(buf).toString("base64");
   return `data:${contentType};base64,${b64}`;
 }
 
-type Heart = { x: number; y: number; r: number; s: number; o: number; t?: string };
+// Deterministic “random-ish” positions (so it doesn't change every refresh)
+function pseudoRand(seed: number) {
+  let t = seed + 0x6d2b79f5;
+  t = Math.imul(t ^ (t >>> 15), t | 1);
+  t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+}
 
-function heartLayout(score: number): Heart[] {
-  // Deterministic positions (so it always looks the same for 69/100)
-  // Spread across the full canvas, avoiding the exact bar center a bit.
-  const base: Heart[] =
-    score === 100
-      ? [
-          { x: 40, y: 35, r: -18, s: 32, o: 0.60 },
-          { x: 95, y: 70, r: 12, s: 22, o: 0.55 },
-          { x: 150, y: 40, r: -6, s: 18, o: 0.45 },
-          { x: 195, y: 85, r: 10, s: 26, o: 0.55 },
-          { x: 305, y: 55, r: -10, s: 22, o: 0.50 },
-          { x: 355, y: 35, r: 16, s: 28, o: 0.60 },
-          { x: 410, y: 75, r: -14, s: 20, o: 0.50 },
-          { x: 460, y: 45, r: 8, s: 24, o: 0.55 },
-          { x: 70, y: 155, r: 14, s: 26, o: 0.55 },
-          { x: 135, y: 175, r: -8, s: 20, o: 0.50 },
-          { x: 185, y: 150, r: 10, s: 18, o: 0.45 },
-          { x: 335, y: 165, r: -12, s: 22, o: 0.50 },
-          { x: 395, y: 150, r: 10, s: 26, o: 0.55 },
-          { x: 455, y: 175, r: -6, s: 20, o: 0.50 },
-        ]
-      : [
-          { x: 55, y: 45, r: -15, s: 28, o: 0.55 },
-          { x: 120, y: 85, r: 10, s: 20, o: 0.50 },
-          { x: 170, y: 55, r: -5, s: 18, o: 0.45 },
-          { x: 320, y: 65, r: 12, s: 22, o: 0.50 },
-          { x: 380, y: 40, r: -10, s: 26, o: 0.55 },
-          { x: 450, y: 80, r: 8, s: 20, o: 0.50 },
-          { x: 85, y: 165, r: 12, s: 22, o: 0.50 },
-          { x: 155, y: 150, r: -8, s: 20, o: 0.45 },
-          { x: 350, y: 160, r: 10, s: 22, o: 0.50 },
-          { x: 430, y: 155, r: -6, s: 24, o: 0.55 },
-          // a couple cheeky “69” marks
-          { x: 25, y: 115, r: -18, s: 18, o: 0.45, t: "69" },
-          { x: 480, y: 120, r: 14, s: 18, o: 0.45, t: "69" },
-        ];
+function HeartsOverlay({ score }: { score: number }) {
+  if (!(score === 69 || score === 100)) return null;
 
-  return base;
+  // More hearts at 100 than 69
+  const count = score === 100 ? 18 : 12;
+
+  const hearts = Array.from({ length: count }).map((_, i) => {
+    const r1 = pseudoRand(score * 1000 + i * 17);
+    const r2 = pseudoRand(score * 2000 + i * 31);
+    const r3 = pseudoRand(score * 3000 + i * 43);
+
+    const left = Math.round(r1 * (CANVAS_W - 30));
+    const top = Math.round(r2 * (CANVAS_H - 30));
+    const size = Math.round(16 + r3 * 18); // 16–34px
+    const rot = Math.round((r1 - 0.5) * 50); // -25..+25deg
+    const opacity = 0.35 + r2 * 0.45; // 0.35..0.8
+
+    return (
+      <div
+        key={i}
+        style={{
+          position: "absolute",
+          left,
+          top,
+          fontSize: size,
+          opacity,
+          transform: `rotate(${rot}deg)`,
+          // helps it pop
+          textShadow: "0 2px 6px rgba(0,0,0,0.45)",
+        }}
+      >
+        ❤️
+      </div>
+    );
+  });
+
+  return (
+    <div style={{ position: "absolute", left: 0, top: 0, width: CANVAS_W, height: CANVAS_H }}>
+      {hearts}
+    </div>
+  );
 }
 
 export async function GET(req: Request) {
@@ -80,14 +89,11 @@ export async function GET(req: Request) {
 
   const debug = searchParams.get("debug") === "1";
 
-  // Optional avatar URLs
   const u1 = searchParams.get("u1");
   const u2 = searchParams.get("u2");
 
-  // Prefer local public asset
   const localTemplateUrl = new URL("/ship-base.png", req.url).toString();
 
-  // Fallback to your GitHub raw image (still fine to keep)
   const fallbackTemplateUrl =
     "https://github.com/nymfluence/whisper-ship-card-v2/blob/main/50.png?raw=true";
 
@@ -131,22 +137,19 @@ export async function GET(req: Request) {
     u2 ? fetchAsDataUrl(u2).catch(() => null) : Promise.resolve(null),
   ]);
 
-  // Fill amount (from bottom up)
   const fillH = Math.round((BAR_H * score) / 100);
   const fillTop = BAR_Y + (BAR_H - fillH);
 
-  // % text sizing (bigger for 69/100 like your examples)
-  const pctText = `${score}%`;
-  const pctFont =
-    score >= 100 ? 64 : score >= 69 ? 58 : score >= 40 ? 48 : 44;
+  // % TEXT SETTINGS
+  const isSpecial = score === 69 || score === 100;
+  const percentText = `${score}%`;
 
-  // Position the % roughly centered on the bar
-  const pctLeft = BAR_X + BAR_W / 2;
-  const pctTop = 18; // keep near the top like your reference cards
+  // Bigger for 69/100
+  const fontSize = score === 100 ? 56 : score === 69 ? 52 : 40;
 
-  // Hearts overlay only for 69 and 100
-  const showHearts = score === 69 || score === 100;
-  const hearts = showHearts ? heartLayout(score) : [];
+  // Position it centered on the bar (slightly above mid)
+  const textLeft = BAR_X + BAR_W / 2;
+  const textTop = 18;
 
   return new ImageResponse(
     (
@@ -157,6 +160,7 @@ export async function GET(req: Request) {
           position: "relative",
           display: "flex",
           backgroundColor: "#000",
+          overflow: "hidden",
         }}
       >
         {/* Base template */}
@@ -165,20 +169,6 @@ export async function GET(req: Request) {
           width={CANVAS_W}
           height={CANVAS_H}
           style={{ position: "absolute", left: 0, top: 0 }}
-        />
-
-        {/* Bar fill overlay */}
-        <div
-          style={{
-            position: "absolute",
-            left: BAR_X,
-            top: fillTop,
-            width: BAR_W,
-            height: fillH,
-            background: "linear-gradient(180deg, #6e1011 0%, #6e1011 100%)",
-            opacity: 0.9,
-            borderRadius: 2,
-          }}
         />
 
         {/* Optional avatars if provided */}
@@ -210,108 +200,41 @@ export async function GET(req: Request) {
           />
         ) : null}
 
-        {/* % text (always on) */}
+        {/* Bar fill overlay */}
         <div
           style={{
             position: "absolute",
-            left: pctLeft,
-            top: pctTop,
+            left: BAR_X,
+            top: fillTop,
+            width: BAR_W,
+            height: fillH,
+            background: "linear-gradient(180deg, #6e1011 0%, #6e1011 100%)",
+            opacity: 0.9,
+            borderRadius: 2,
+          }}
+        />
+
+        {/* % text (ALWAYS shows for 0–100; you can clamp to 1–100 in your bot if you want) */}
+        <div
+          style={{
+            position: "absolute",
+            left: textLeft,
+            top: textTop,
             transform: "translateX(-50%)",
-            fontSize: pctFont,
+            fontSize,
             fontWeight: 900,
             color: "#ffffff",
             letterSpacing: -1,
-            textShadow: "0 2px 6px rgba(0,0,0,0.55)",
-            fontFamily:
-              'ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Arial',
+            textShadow: "0 2px 10px rgba(0,0,0,0.65)",
+            // slightly extra emphasis for special scores
+            opacity: isSpecial ? 1 : 0.95,
           }}
         >
-          {pctText}
+          {percentText}
         </div>
 
-        {/* Hearts / celebration overlay (69 + 100 only) */}
-        {showHearts ? (
-          <div
-            style={{
-              position: "absolute",
-              left: 0,
-              top: 0,
-              width: CANVAS_W,
-              height: CANVAS_H,
-            }}
-          >
-            {hearts.map((h, i) => (
-              <div
-                key={i}
-                style={{
-                  position: "absolute",
-                  left: h.x,
-                  top: h.y,
-                  transform: `rotate(${h.r}deg)`,
-                  fontSize: h.s,
-                  fontWeight: 900,
-                  color: "#ffffff",
-                  opacity: h.o,
-                  textShadow: "0 2px 6px rgba(0,0,0,0.35)",
-                  fontFamily:
-                    'ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Arial',
-                }}
-              >
-                {h.t ? h.t : "♥"}
-              </div>
-            ))}
-
-            {/* a few sparkles for “celebratory” feel */}
-            <div
-              style={{
-                position: "absolute",
-                left: 70,
-                top: 25,
-                fontSize: 18,
-                opacity: 0.55,
-                color: "#ffffff",
-              }}
-            >
-              ✦
-            </div>
-            <div
-              style={{
-                position: "absolute",
-                left: 460,
-                top: 30,
-                fontSize: 16,
-                opacity: 0.5,
-                color: "#ffffff",
-              }}
-            >
-              ✦
-            </div>
-            <div
-              style={{
-                position: "absolute",
-                left: 40,
-                top: 190,
-                fontSize: 14,
-                opacity: 0.45,
-                color: "#ffffff",
-              }}
-            >
-              ✦
-            </div>
-            <div
-              style={{
-                position: "absolute",
-                left: 485,
-                top: 190,
-                fontSize: 14,
-                opacity: 0.45,
-                color: "#ffffff",
-              }}
-            >
-              ✦
-            </div>
-          </div>
-        ) : null}
+        {/* Hearts overlay ONLY for 69 & 100 (no fetching, so it won't crash) */}
+        <HeartsOverlay score={score} />
       </div>
     ),
     {
