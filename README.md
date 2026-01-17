@@ -6,7 +6,7 @@
 - /api/ship?debug=1 -> JSON debug output
 
 ## Template
-Place your Canva base image at:
+Place your Canva base at:
 public/ship-base.png
 
 Then confirm it loads:
