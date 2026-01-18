@@ -14,6 +14,7 @@ const BAR_H = 220;
 function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
 }
+
 function toInt(v: string | null, fallback: number) {
   const n = Number(v);
   return Number.isFinite(n) ? Math.trunc(n) : fallback;
@@ -39,26 +40,10 @@ async function fetchAsDataUrl(url: string): Promise<string> {
   return `data:${contentType};base64,${b64}`;
 }
 
-async function safeFetchDataUrl(url: string) {
-  try {
-    const dataUrl = await fetchAsDataUrl(url);
-    return { ok: true as const, url, dataUrl };
-  } catch (e: any) {
-    return { ok: false as const, url, dataUrl: null as string | null, error: String(e?.message ?? e) };
-  }
-}
-
-async function safeFetchFont(url: string) {
-  try {
-    const res = await fetch(url, { cache: "no-store" });
-    if (!res.ok) {
-      return { ok: false as const, url, data: null as ArrayBuffer | null, error: `Fetch failed ${res.status}` };
-    }
-    const data = await res.arrayBuffer();
-    return { ok: true as const, url, data };
-  } catch (e: any) {
-    return { ok: false as const, url, data: null as ArrayBuffer | null, error: String(e?.message ?? e) };
-  }
+async function fetchFont(url: string): Promise<ArrayBuffer> {
+  const res = await fetch(url, { cache: "no-store" });
+  if (!res.ok) throw new Error(`Font fetch failed ${res.status} for ${url}`);
+  return await res.arrayBuffer();
 }
 
 export async function GET(req: Request) {
@@ -66,6 +51,7 @@ export async function GET(req: Request) {
 
   const scoreRaw = searchParams.get("score") ?? "0";
   const score = clamp(toInt(scoreRaw, 0), 0, 100);
+
   const debug = searchParams.get("debug") === "1";
 
   // Optional avatar URLs
@@ -75,26 +61,35 @@ export async function GET(req: Request) {
   // Public assets
   const templateUrl = new URL("/ship-base.png", req.url).toString();
 
-  // Overlay logic:
+  // Overlays:
   // - 69 => overlay-69.png
   // - 100 => overlay-100.png
   // - everything else => overlay-all.png
   const overlayPath =
-    score === 69 ? "/overlay-69.png" : score === 100 ? "/overlay-100.png" : "/overlay-all.png";
+    score === 69
+      ? "/overlay-69.png"
+      : score === 100
+      ? "/overlay-100.png"
+      : "/overlay-all.png";
+
   const overlayUrl = new URL(overlayPath, req.url).toString();
 
-  // Font (your file)
+  // Font (must exist at /public/fonts/NotoSerif-Bold.ttf)
   const fontUrl = new URL("/fonts/NotoSerif-Bold.ttf", req.url).toString();
 
-  // If debug=1, return diagnostics (no image)
+  // Debug mode returns JSON so you can see if assets resolve
   if (debug) {
-    const [fontTest, templateTest, overlayTest, u1Test, u2Test] = await Promise.all([
-      safeFetchFont(fontUrl),
-      safeFetchDataUrl(templateUrl),
-      safeFetchDataUrl(overlayUrl),
-      u1 ? safeFetchDataUrl(u1) : Promise.resolve({ ok: false as const, url: "", dataUrl: null, error: "u1 not provided" }),
-      u2 ? safeFetchDataUrl(u2) : Promise.resolve({ ok: false as const, url: "", dataUrl: null, error: "u2 not provided" }),
+    // quick “ping” checks (don’t download whole images)
+    const checks = await Promise.allSettled([
+      fetch(templateUrl, { cache: "no-store" }),
+      fetch(overlayUrl, { cache: "no-store" }),
+      fetch(fontUrl, { cache: "no-store" }),
     ]);
+
+    const asResult = (r: PromiseSettledResult<Response>) =>
+      r.status === "fulfilled"
+        ? { ok: r.value.ok, status: r.value.status }
+        : { ok: false, error: String(r.reason) };
 
     return new Response(
       JSON.stringify(
@@ -104,18 +99,13 @@ export async function GET(req: Request) {
           templateUrl,
           overlayUrl,
           fontUrl,
-          fontOk: fontTest.ok,
-          fontError: (fontTest as any).error ?? null,
-          templateOk: templateTest.ok,
-          templateError: (templateTest as any).error ?? null,
-          overlayOk: overlayTest.ok,
-          overlayError: (overlayTest as any).error ?? null,
           u1Provided: Boolean(u1),
           u2Provided: Boolean(u2),
-          u1Ok: u1 ? u1Test.ok : null,
-          u1Error: u1 ? (u1Test as any).error ?? null : null,
-          u2Ok: u2 ? u2Test.ok : null,
-          u2Error: u2 ? (u2Test as any).error ?? null : null,
+          checks: {
+            template: asResult(checks[0] as any),
+            overlay: asResult(checks[1] as any),
+            font: asResult(checks[2] as any),
+          },
         },
         null,
         2
@@ -124,21 +114,22 @@ export async function GET(req: Request) {
     );
   }
 
-  // Fetch template/overlay/avatars as data URLs (never crash if optional ones fail)
-  const [templateRes, overlayRes, u1Res, u2Res, fontRes] = await Promise.all([
-    safeFetchDataUrl(templateUrl),
-    safeFetchDataUrl(overlayUrl),
-    u1 ? safeFetchDataUrl(u1) : Promise.resolve({ ok: false as const, url: "", dataUrl: null, error: "u1 not provided" }),
-    u2 ? safeFetchDataUrl(u2) : Promise.resolve({ ok: false as const, url: "", dataUrl: null, error: "u2 not provided" }),
-    safeFetchFont(fontUrl),
-  ]);
+  // Fetch assets
+  // IMPORTANT: Font is passed as ArrayBuffer via ImageResponse fonts option.
+  let notoSerifBold: ArrayBuffer | null = null;
+  try {
+    notoSerifBold = await fetchFont(fontUrl);
+  } catch {
+    // If font fails, we STILL render with default font (so it won’t white-screen)
+    notoSerifBold = null;
+  }
 
-  // If the base template fails, we still return a black canvas with bar/text,
-  // so Discord doesn’t show a broken image.
-  const templateDataUrl = templateRes.ok ? templateRes.dataUrl : null;
-  const overlayDataUrl = overlayRes.ok ? overlayRes.dataUrl : null;
-  const u1Data = u1Res.ok ? u1Res.dataUrl : null;
-  const u2Data = u2Res.ok ? u2Res.dataUrl : null;
+  const [templateDataUrl, overlayDataUrl, u1Data, u2Data] = await Promise.all([
+    fetchAsDataUrl(templateUrl),
+    fetchAsDataUrl(overlayUrl).catch(() => null),
+    u1 ? fetchAsDataUrl(u1).catch(() => null) : Promise.resolve(null),
+    u2 ? fetchAsDataUrl(u2).catch(() => null) : Promise.resolve(null),
+  ]);
 
   // Fill amount (from bottom up)
   const fillH = Math.round((BAR_H * score) / 100);
@@ -153,18 +144,6 @@ export async function GET(req: Request) {
   const isSpecial = score === 69 || score === 100;
   const fontSize = isSpecial ? 62 : 46;
 
-  // Fonts array only if we successfully loaded the font
-  const fonts = fontRes.ok
-    ? [
-        {
-          name: "Noto Serif",
-          data: fontRes.data as ArrayBuffer,
-          weight: 700 as const,
-          style: "normal" as const,
-        },
-      ]
-    : [];
-
   return new ImageResponse(
     (
       <div
@@ -176,17 +155,15 @@ export async function GET(req: Request) {
           backgroundColor: "#000",
         }}
       >
-        {/* Base template (if available) */}
-        {templateDataUrl ? (
-          <img
-            src={templateDataUrl}
-            width={CANVAS_W}
-            height={CANVAS_H}
-            style={{ position: "absolute", left: 0, top: 0 }}
-          />
-        ) : null}
+        {/* Base template */}
+        <img
+          src={templateDataUrl}
+          width={CANVAS_W}
+          height={CANVAS_H}
+          style={{ position: "absolute", left: 0, top: 0 }}
+        />
 
-        {/* Avatars (if provided & loaded) */}
+        {/* Optional avatars */}
         {u1Data ? (
           <img
             src={u1Data}
@@ -215,7 +192,7 @@ export async function GET(req: Request) {
           />
         ) : null}
 
-        {/* Bar fill */}
+        {/* Bar fill overlay */}
         <div
           style={{
             position: "absolute",
@@ -236,9 +213,10 @@ export async function GET(req: Request) {
             left: textX,
             top: textY,
             transform: "translateX(-50%)",
-            fontFamily: fontRes.ok ? '"Noto Serif"' : "serif",
             fontSize,
             fontWeight: 700,
+            // This name MUST match the fonts[] name below
+            fontFamily: notoSerifBold ? "Noto Serif" : "sans-serif",
             color: "#FFFFFF",
             letterSpacing: "-1px",
             textShadow: "0px 3px 10px rgba(0,0,0,0.65)",
@@ -262,10 +240,20 @@ export async function GET(req: Request) {
     {
       width: CANVAS_W,
       height: CANVAS_H,
-      fonts,
       headers: {
         "cache-control": "no-store, max-age=0",
       },
+      // ✅ This is the key part:
+      fonts: notoSerifBold
+        ? [
+            {
+              name: "Noto Serif",
+              data: notoSerifBold,
+              style: "normal",
+              weight: 700,
+            },
+          ]
+        : [],
     }
   );
 }
