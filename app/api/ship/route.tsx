@@ -28,7 +28,6 @@ function arrayBufferToBase64(buf: ArrayBuffer) {
   for (let i = 0; i < bytes.length; i += chunkSize) {
     binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
   }
-  // btoa exists in Edge runtime
   return btoa(binary);
 }
 
@@ -179,8 +178,8 @@ export async function GET(req: Request) {
             top: textY,
             transform: "translateX(-50%)",
             fontSize,
-            fontWeight: 900,
-            fontFamily: 'Georgia, "Times New Roman", serif', // <- serif revert (no font files)
+            fontWeight: 800, // 900 often won’t exist in default serif, 800 looks cleaner
+            fontFamily: '"Times New Roman", Times, serif', // <-- THIS is the change
             color: "#FFFFFF",
             letterSpacing: "-1px",
             textShadow: "0px 3px 10px rgba(0,0,0,0.65)",
