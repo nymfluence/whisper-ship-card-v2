@@ -5,7 +5,7 @@ export const runtime = "edge";
 const CANVAS_W = 512;
 const CANVAS_H = 220;
 
-// Your Canva-measured bar coordinates
+// Canva-measured bar coordinates
 const BAR_X = 220.5;
 const BAR_Y = 0;
 const BAR_W = 71.1;
@@ -49,7 +49,7 @@ export async function GET(req: Request) {
 
   const debug = searchParams.get("debug") === "1";
 
-  // Optional avatar URLs (if you pass them later)
+  // Optional avatar URLs
   const u1 = searchParams.get("u1");
   const u2 = searchParams.get("u2");
 
@@ -57,17 +57,21 @@ export async function GET(req: Request) {
   const templateUrl = new URL("/ship-base.png", req.url).toString();
 
   // Overlays:
-  // - 69: overlay-69
-  // - 100: overlay-100
-  // - everything else: overlay-all
+  // - 69 => /overlay-69.png
+  // - 100 => /overlay-100.png
+  // - everything else => /overlay-all.png
   const overlayPath =
     score === 69
       ? "/overlay-69.png"
       : score === 100
-      ? "/overlay-100.png"
-      : "/overlay-all.png";
+        ? "/overlay-100.png"
+        : "/overlay-all.png";
 
   const overlayUrl = new URL(overlayPath, req.url).toString();
+
+  // Font from /public/fonts
+  // Put your file at: public/fonts/NotoSerif-Bold.ttf
+  const notoSerifUrl = new URL("/fonts/NotoSerif-Bold.ttf", req.url).toString();
 
   // Debug mode returns JSON (no image)
   if (debug) {
@@ -78,6 +82,7 @@ export async function GET(req: Request) {
           score,
           templateUrl,
           overlayUrl,
+          notoSerifUrl,
           u1Provided: Boolean(u1),
           u2Provided: Boolean(u2),
         },
@@ -88,13 +93,18 @@ export async function GET(req: Request) {
     );
   }
 
-  // Fetch images as data URLs (OG renderer behaves best this way)
-  const [templateDataUrl, overlayDataUrl, u1Data, u2Data] = await Promise.all([
-    fetchAsDataUrl(templateUrl),
-    fetchAsDataUrl(overlayUrl).catch(() => null),
-    u1 ? fetchAsDataUrl(u1).catch(() => null) : Promise.resolve(null),
-    u2 ? fetchAsDataUrl(u2).catch(() => null) : Promise.resolve(null),
-  ]);
+  // Fetch font (can be cached), and images as data URLs
+  const [fontData, templateDataUrl, overlayDataUrl, u1Data, u2Data] =
+    await Promise.all([
+      fetch(notoSerifUrl, { cache: "force-cache" }).then((r) => {
+        if (!r.ok) throw new Error(`Font fetch failed ${r.status} for ${notoSerifUrl}`);
+        return r.arrayBuffer();
+      }),
+      fetchAsDataUrl(templateUrl),
+      fetchAsDataUrl(overlayUrl).catch(() => null),
+      u1 ? fetchAsDataUrl(u1).catch(() => null) : Promise.resolve(null),
+      u2 ? fetchAsDataUrl(u2).catch(() => null) : Promise.resolve(null),
+    ]);
 
   // Fill amount (from bottom up)
   const fillH = Math.round((BAR_H * score) / 100);
@@ -128,7 +138,7 @@ export async function GET(req: Request) {
           style={{ position: "absolute", left: 0, top: 0 }}
         />
 
-        {/* Optional avatars (if provided) */}
+        {/* Optional avatars */}
         {u1Data ? (
           <img
             src={u1Data}
@@ -157,7 +167,7 @@ export async function GET(req: Request) {
           />
         ) : null}
 
-        {/* Bar fill overlay */}
+        {/* Bar fill overlay (your colour) */}
         <div
           style={{
             position: "absolute",
@@ -171,15 +181,16 @@ export async function GET(req: Request) {
           }}
         />
 
-        {/* % text (ALWAYS shown) */}
+        {/* % text (Noto Serif) */}
         <div
           style={{
             position: "absolute",
             left: textX,
             top: textY,
             transform: "translateX(-50%)",
+            fontFamily: "NotoSerif",
             fontSize,
-            fontWeight: 900,
+            fontWeight: 700,
             color: "#FFFFFF",
             letterSpacing: "-1px",
             textShadow: "0px 3px 10px rgba(0,0,0,0.65)",
@@ -203,6 +214,14 @@ export async function GET(req: Request) {
     {
       width: CANVAS_W,
       height: CANVAS_H,
+      fonts: [
+        {
+          name: "NotoSerif",
+          data: fontData,
+          weight: 700,
+          style: "normal",
+        },
+      ],
       headers: {
         "cache-control": "no-store, max-age=0",
       },
