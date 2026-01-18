@@ -3,7 +3,7 @@
 ## Endpoints
 - /api/ping -> pong
 - /api/ship?score=31 -> PNG ship image
-- /api/ship?debug=1 -> JSON debug output
+- /api/ship?debug=1 -> JSON debug output.
 
 ## Template
 Place your Canva base at:
