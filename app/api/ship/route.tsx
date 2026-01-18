@@ -180,6 +180,7 @@ export async function GET(req: Request) {
             transform: "translateX(-50%)",
             fontSize,
             fontWeight: 900,
+            fontFamily: 'Georgia, "Times New Roman", serif', // <- serif revert (no font files)
             color: "#FFFFFF",
             letterSpacing: "-1px",
             textShadow: "0px 3px 10px rgba(0,0,0,0.65)",
